@@ -2,12 +2,13 @@
 
 MedBrief is a voice-driven, multi-turn AI assistant that lets healthcare workers query
 clinical protocol summaries hands-free. Speak a question into the browser, and MedBrief
-transcribes it with OpenAI Whisper, routes it through a RabbitMQ message queue to a
-GPT-4o-powered agent worker, searches PubMed for relevant evidence when needed, and
-streams the spoken response back within seconds — all while remembering the context of
-the conversation so follow-up questions work naturally. The architecture mirrors
-Haptik's Contakt LLM platform: FastAPI gateway, async message queuing, Redis hot-memory,
-and MongoDB cold persistence, Dockerised and runnable from a single command.
+transcribes it with Groq Whisper, routes it through a RabbitMQ message queue to a
+Llama 3.3 70B-powered agent worker, searches PubMed for relevant evidence when needed,
+and streams the spoken response back within seconds — all while remembering the context
+of the conversation so follow-up questions work naturally.
+
+Fully Dockerised, runs from a single command, and uses the **Groq free tier** throughout
+— no credit card required.
 
 ---
 
@@ -18,13 +19,13 @@ and MongoDB cold persistence, Dockerised and runnable from a single command.
 │                        Browser / Client                         │
 │   Mic Input → JS MediaRecorder → POST /voice → Speaker Output  │
 └────────────────────┬───────────────────────────────────────────┘
-                     │ audio blob (webm/wav)
+                     │ audio blob (webm)
                      ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                     FastAPI Gateway  :8000                      │
-│   /voice  → STT (Whisper API)  → text                          │
+│   /voice  → STT (Groq Whisper)  → text                         │
 │   /chat   → publish to RabbitMQ exchange: agent.requests       │
-│   /tts    → TTS (OpenAI TTS API) → audio stream back           │
+│   /tts    → TTS (edge-tts, Microsoft neural) → audio stream    │
 └────────────────────┬───────────────────────────────────────────┘
                      │ AMQP message
                      ▼
@@ -33,10 +34,10 @@ and MongoDB cold persistence, Dockerised and runnable from a single command.
 │   Consumes from: agent.requests                                 │
 │   1. Load conversation history from Redis (session_id key)      │
 │   2. Append new user turn                                       │
-│   3. Call GPT-4o with system prompt + history                   │
+│   3. Call Llama 3.3 70B (Groq) with system prompt + history    │
 │   4. If tool_call detected → call external API (PubMed)        │
 │   5. Append assistant turn to Redis                             │
-│   6. Publish response to agent.responses (reply_to routing)     │
+│   6. Publish response to reply_to queue (RPC pattern)          │
 └────────────────────┬───────────────────────────────────────────┘
                      │ stores turns
                      ▼
@@ -52,8 +53,8 @@ and MongoDB cold persistence, Dockerised and runnable from a single command.
 ## Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (includes Docker Compose v2)
-- An [OpenAI API key](https://platform.openai.com/api-keys) with access to `gpt-4o`, `whisper-1`, and `tts-1`
-- A modern browser (Chrome or Firefox recommended for MediaSource streaming)
+- A [Groq API key](https://console.groq.com) — free tier, no credit card required
+- Chrome or Firefox (recommended for MediaSource audio streaming)
 
 ---
 
@@ -61,16 +62,18 @@ and MongoDB cold persistence, Dockerised and runnable from a single command.
 
 ```bash
 # 1. Copy the env template
-cp .env.example .env
+cp .env.example .env       # Mac/Linux
+# Windows PowerShell:
+# Copy-Item .env.example .env
 
-# 2. Open .env and set your OpenAI API key
-#    OPENAI_API_KEY=sk-...
+# 2. Open .env and set your Groq API key
+#    GROQ_API_KEY=gsk_...
 
 # 3. Build and start all services
-make run
+docker compose up --build -d
 
 # 4. Watch services come up healthy
-make ps
+docker compose ps
 
 # 5. Open the UI
 #    http://localhost
@@ -81,9 +84,20 @@ make ps
 
 To stop:
 ```bash
-make stop          # stop containers, keep data volumes
-make clean         # stop + delete all volumes (fresh start)
+docker compose down          # stop containers, keep data volumes
+docker compose down -v       # stop + delete all volumes (fresh start)
 ```
+
+---
+
+## AI Stack
+
+| Component | Service | Model | Cost |
+|-----------|---------|-------|------|
+| STT | Groq | `whisper-large-v3` | Free tier |
+| LLM | Groq | `llama-3.3-70b-versatile` | Free tier |
+| TTS | edge-tts (Microsoft neural) | `en-US-AriaNeural` | Free, no key |
+| Tool | NCBI PubMed E-utilities | — | Free, no key |
 
 ---
 
@@ -91,40 +105,38 @@ make clean         # stop + delete all volumes (fresh start)
 
 ### FastAPI Gateway (`gateway/`)
 
-The gateway is the sole entry point for the browser. On `POST /voice` it reads the
-uploaded audio blob, sends it to OpenAI Whisper for transcription, then publishes the
-transcript to RabbitMQ using the AMQP RPC pattern: the message carries a `correlation_id`
-and a `reply_to` exclusive queue name. The gateway suspends via `asyncio.wait_for` until
-the agent posts the reply back, then feeds the response text into OpenAI TTS and streams
-the MP3 back to the browser as a chunked `StreamingResponse`. The `lifespan` context
-manager ensures the AMQP connection is created and torn down cleanly with the server.
+The gateway is the sole HTTP entry point. On `POST /voice` it reads the uploaded audio
+blob, sends it to Groq Whisper for transcription, then publishes the transcript to
+RabbitMQ using the AMQP RPC pattern: the message carries a `correlation_id` and a
+`reply_to` exclusive queue name. The gateway suspends via `asyncio.wait_for` until the
+agent posts the reply, then feeds the response text into edge-tts and streams the MP3
+back as a chunked `StreamingResponse`. A `lifespan` context manager manages the AMQP
+connection lifecycle cleanly.
 
 ### Agent Worker (`agent/`)
 
 The worker consumes messages from `agent.requests`. For each message it loads the
-session's conversation history from Redis, calls GPT-4o (with the full history as
-context for multi-turn memory), handles any `tool_calls` by hitting the PubMed
-E-utilities API, then appends the new turns to both Redis (hot memory for the next
-turn) and MongoDB (cold audit trail). The reply is published to the gateway's temporary
-reply queue identified by `reply_to`. Any unhandled exception causes the message to be
-nack'd and routed to the dead-letter queue `agent.dead_letters` rather than silently
-dropped.
+session's conversation history from Redis, calls Llama 3.3 70B on Groq (with the full
+history for multi-turn memory), handles any `tool_calls` by hitting the PubMed
+E-utilities API, then appends turns to both Redis (hot memory) and MongoDB (cold audit
+trail). The reply is published back to the gateway's temporary reply queue. Any
+unhandled exception nacks the message → routed to the dead-letter queue
+`agent.dead_letters`. A regex filter strips function-call markup that Llama occasionally
+leaks into response text before the reply is sent.
 
 ### Redis Memory (`agent/memory.py`)
 
 Conversation history lives under `session:{session_id}:history` as a Redis List.
-Turns are pushed newest-first (`LPUSH`) so `LTRIM` can keep the newest 20 entries
-efficiently. A pipeline executes `LPUSH + LTRIM + EXPIRE` atomically on every turn
-append. The 30-minute TTL means an idle session automatically expires without manual
-cleanup — matching Haptik's stateless session design.
+Turns are pushed newest-first (`LPUSH`), trimmed to 20 entries (`LTRIM`), and the TTL
+is refreshed — all in a single atomic pipeline on every append. Sessions expire
+automatically after 30 minutes of inactivity.
 
 ### MongoDB Persistence (`agent/db.py`)
 
-Completed turns are written to the `sessions` collection in the `medbrief` database.
-Each session document holds `started_at`, `ended_at`, the full `turns` array (with
-`tool_calls` on assistant turns for auditability), and metadata. `ensure_session` uses
-`$setOnInsert` with `upsert=True` so the first message atomically creates the document
-without overwriting it on subsequent turns.
+Turns are written to the `sessions` collection in the `medbrief` database. Each session
+document holds `started_at`, `ended_at`, the full `turns` array with `tool_calls` on
+assistant turns for auditability, and metadata. `ensure_session` uses `$setOnInsert`
+with `upsert=True` so concurrent first-turn calls are safe.
 
 ---
 
@@ -132,23 +144,26 @@ without overwriting it on subsequent turns.
 
 ### Why RabbitMQ instead of calling the LLM directly from the HTTP handler?
 
-A synchronous LLM call blocks the gateway coroutine for 2–20 seconds and couples
-availability of the HTTP tier to availability of the LLM. By publishing to RabbitMQ
-first, the gateway immediately frees the event loop, the agent worker can be scaled
-horizontally (multiple consumer replicas), failed messages land in a dead-letter queue
-instead of timing out silently, and the broker provides backpressure when demand
-exceeds worker capacity. This is precisely the async pipeline architecture Haptik uses
-in its Contakt platform for enterprise-scale concurrent conversations.
+A synchronous LLM call blocks the gateway coroutine for several seconds and couples
+HTTP availability to LLM availability. Publishing to RabbitMQ first frees the event
+loop immediately, allows the agent worker to scale horizontally, routes failed messages
+to a dead-letter queue instead of dropping them silently, and gives the broker
+natural backpressure when load is high.
 
 ### Why Redis for conversation memory instead of MongoDB?
 
-Conversation state is hot (read on every turn), small (20 JSON objects per session),
-and temporary (expires after 30 minutes of inactivity). Redis gives sub-millisecond
-reads, atomic pipeline operations for LPUSH + LTRIM + EXPIRE, and automatic expiry
-with no background job needed. MongoDB handles cold storage: it has richer query
-support, durable replication, and is suited to the sparse, analytical access pattern
-of session post-processing and tool-call auditing. This two-tier strategy mirrors
-Haptik's production data architecture.
+Conversation state is hot (read on every turn), small (≤20 JSON objects), and
+temporary (expires after 30 minutes). Redis gives sub-millisecond reads and atomic
+`LPUSH + LTRIM + EXPIRE` in a single pipeline with no background cleanup needed.
+MongoDB is used for cold storage where its richer query support and durable
+replication are actually needed — session analytics and tool-call audit logs.
+
+### Why Groq + edge-tts instead of a paid AI service?
+
+Groq exposes an OpenAI-compatible API, so the swap required only changing `base_url`
+in the existing `openai` SDK client — no rewrite. The free tier handles demo workloads
+comfortably. edge-tts uses Microsoft's neural TTS with no key or billing required,
+producing quality comparable to paid TTS APIs.
 
 ---
 
@@ -156,53 +171,45 @@ Haptik's production data architecture.
 
 ### Known limitations
 
-- TTS playback falls back to blob-URL (collect-then-play) in Safari because Safari
-  does not support `MediaSource` with `audio/mpeg`. A WebSocket-based streaming
-  endpoint would resolve this cross-browser.
-- The `/voice` endpoint chains STT → AMQP RPC → TTS sequentially; end-to-end latency
-  is roughly 3–8 s depending on OpenAI API response times.
-- No authentication layer — suitable for local / demo use only.
-- PubMed E-utilities returns at most 3 abstracts; the free tier is rate-limited to
-  3 requests/second without `PUBMED_API_KEY`.
+- Safari does not support `MediaSource` with `audio/mpeg`; playback falls back to
+  collect-then-play via a Blob URL.
+- End-to-end latency is roughly 3–8 s (STT → AMQP RPC → LLM → TTS chained sequentially).
+- No authentication layer — for local / demo use only.
+- PubMed E-utilities returns at most 3 abstracts and is rate-limited to 3 req/s
+  without a `PUBMED_API_KEY`.
+- Llama 3.x occasionally leaks function-call markup into response text; a regex
+  filter in `agent/llm.py` strips it before the reply is sent.
 
 ### Stretch goals
 
-- [ ] WebSocket endpoint replacing the polling fetch loop for true real-time
-      streaming of both transcript and audio
-- [ ] Language detection + multilingual TTS (Haptik supports 135 languages;
-      OpenAI TTS supports multiple languages natively)
-- [ ] Agent Co-Pilot mode: post a Slack webhook summary after each conversation ends
-- [ ] Prometheus `/metrics` endpoint: request count, LLM latency histogram,
-      RabbitMQ queue depth
-- [ ] Redis token-bucket rate limiting per `session_id` to prevent abuse
+- [ ] WebSocket endpoint for true real-time streaming of transcript and audio
+- [ ] Language detection + multilingual TTS (edge-tts supports 40+ locales)
+- [ ] Session summary posted to a Slack webhook after each conversation ends
+- [ ] Prometheus `/metrics` endpoint: request count, LLM latency, queue depth
+- [ ] Redis token-bucket rate limiting per `session_id`
 
 ---
 
-## Interview Talking Points
+## Architecture Q&A
 
-### 1. Why async message queuing instead of a direct LLM call from the gateway?
+### Why async message queuing instead of a direct LLM call from the gateway?
 
-Haptik processes millions of conversations. A synchronous LLM call blocks the gateway
-thread and cannot scale. RabbitMQ decouples ingestion from processing, enables retries
-on failure, and allows multiple worker instances — identical to how Haptik's bot
-pipeline handles concurrent enterprise clients. In this project, `publisher.py` uses
-the AMQP RPC pattern with `correlation_id` and `reply_to` to simulate synchronous
-behaviour to the HTTP caller while keeping the actual LLM call fully asynchronous.
+Decoupling ingestion from processing means the HTTP tier stays responsive regardless
+of LLM latency. Workers can be scaled horizontally — multiple consumers on the same
+queue process requests in parallel. Failed messages land in a dead-letter queue rather
+than vanishing. The broker absorbs traffic spikes naturally.
 
-### 2. Why Redis for conversation memory instead of a database?
+### Why Redis for conversation memory instead of a database?
 
-Conversation state is hot, small, and temporary. Redis gives sub-millisecond reads
-with automatic TTL-based expiry. MongoDB is for cold, persistent analytics. This
-mirrors Haptik's two-tier data strategy across their Contakt platform. Using
-`LPUSH + LTRIM + EXPIRE` in a single pipeline is an atomic, O(1) operation — there
-is no cheaper way to maintain a bounded, time-expiring rolling window of messages.
+Hot, small, temporary data is exactly what Redis is built for. Sub-millisecond reads,
+atomic bounded-list operations (`LPUSH + LTRIM + EXPIRE`), and automatic TTL expiry
+with zero background jobs. The database handles durable, queryable, cold storage — a
+different access pattern entirely.
 
-### 3. How would you scale this to Haptik's production load (10 B+ conversations)?
+### How would you scale this for high concurrency?
 
-Horizontal agent workers consuming from the same `agent.requests` queue — RabbitMQ
-distributes messages round-robin, so adding replicas linearly increases throughput.
-Redis Cluster shards session keys by `session_id` hash slot. MongoDB shards the
-`sessions` collection on `session_id`. RabbitMQ queue mirroring (or quorum queues)
-removes the broker as a SPOF. Kubernetes HPA watches queue depth via a Prometheus
-exporter and scales the agent `Deployment` automatically — exactly the stack Haptik
-runs on Azure AKS.
+Horizontal agent workers share the same `agent.requests` queue — RabbitMQ distributes
+round-robin, so throughput scales linearly with replicas. Redis Cluster shards session
+keys by hash slot. MongoDB shards the `sessions` collection on `session_id`. Quorum
+queues remove RabbitMQ as a single point of failure. Kubernetes HPA on queue depth
+metrics handles auto-scaling automatically.
