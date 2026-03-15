@@ -261,23 +261,14 @@ async function handleRecordingStop() {
 
 // ── Audio streaming playback ──────────────────────────────────────────────────
 /**
- * Streams MP3 audio from a fetch Response using MediaSource API.
- * Falls back to collecting all bytes and playing as a Blob URL if
- * MediaSource / audio/mpeg is unsupported (e.g. older Safari).
+ * Collects the full MP3 response then plays it as a Blob URL.
+ * More reliable than MediaSource across Chrome, Firefox, and Safari
+ * because it avoids autoplay policy timing issues — the play() call
+ * happens inside the same user-gesture chain as the mic button click.
  */
 async function playAudioStream(response) {
   const reader = response.body.getReader();
-
-  // Detect MediaSource support for audio/mpeg (Chrome, Firefox)
-  const msSupported =
-    typeof MediaSource !== 'undefined' &&
-    MediaSource.isTypeSupported('audio/mpeg');
-
-  if (msSupported) {
-    return playViaMediaSource(reader);
-  } else {
-    return playViaBlobUrl(reader);
-  }
+  return playViaBlobUrl(reader);
 }
 
 function playViaMediaSource(reader) {
