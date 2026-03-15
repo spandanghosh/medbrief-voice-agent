@@ -14,6 +14,7 @@ Tool calling loop:
   - Re-calls the model to produce the final user-facing text
   - All tool invocations are logged to MongoDB for auditability
 """
+import asyncio
 import json
 import re
 from typing import Optional
@@ -174,25 +175,31 @@ class LLMClient:
         return final_text, tool_calls_log
 
     async def _call_llm(self, messages: list[dict]):
-        """Single LLM API call with error handling."""
-        try:
-            return await self._client.chat.completions.create(
-                model=self._settings.llm_model,
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-                max_tokens=300,
-                temperature=0.3,
-            )
-        except RateLimitError as exc:
-            logger.error("llm_rate_limit", error=str(exc))
-            raise
-        except APIConnectionError as exc:
-            logger.error("llm_connection_error", error=str(exc))
-            raise
-        except APIError as exc:
-            logger.error("llm_api_error", status_code=exc.status_code, error=str(exc))
-            raise
-        except Exception as exc:
-            logger.error("llm_unexpected", error=str(exc))
-            raise
+        """Single LLM API call with retry on rate limit (3 attempts, 10s backoff)."""
+        for attempt in range(3):
+            try:
+                return await self._client.chat.completions.create(
+                    model=self._settings.llm_model,
+                    messages=messages,
+                    tools=TOOLS,
+                    tool_choice="auto",
+                    max_tokens=300,
+                    temperature=0.3,
+                )
+            except RateLimitError as exc:
+                if attempt < 2:
+                    wait = 5 * (attempt + 1)  # 5s, 10s
+                    logger.warning("llm_rate_limit_retrying", attempt=attempt + 1, wait_s=wait)
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error("llm_rate_limit_exhausted", error=str(exc))
+                    raise
+            except APIConnectionError as exc:
+                logger.error("llm_connection_error", error=str(exc))
+                raise
+            except APIError as exc:
+                logger.error("llm_api_error", status_code=exc.status_code, error=str(exc))
+                raise
+            except Exception as exc:
+                logger.error("llm_unexpected", error=str(exc))
+                raise

@@ -19,6 +19,7 @@ import logging
 import aio_pika
 import aio_pika.abc
 import structlog
+from openai import RateLimitError
 from pydantic_settings import BaseSettings
 
 from db import SessionDB
@@ -98,37 +99,54 @@ async def process_message(
         )
         log.info("agent_message_received", preview=user_text[:80])
 
-        # ── 1. Ensure MongoDB session document exists ────────────────────────
-        await db.ensure_session(session_id=session_id)
+        response_text = ""
+        tool_calls: list[dict] = []
 
-        # ── 2. Load conversation history from Redis ──────────────────────────
-        history = await memory.get_history(session_id=session_id)
-        log.info("history_loaded", turns=len(history))
+        try:
+            # ── 1. Ensure MongoDB session document exists ────────────────────
+            await db.ensure_session(session_id=session_id)
 
-        # ── 3. Call LLM (may invoke tool calls internally) ───────────────────
-        response_text, tool_calls = await llm_client.chat(
-            history=history,
-            user_text=user_text,
-        )
-        log.info(
-            "llm_replied",
-            preview=response_text[:80],
-            tool_calls=len(tool_calls),
-        )
+            # ── 2. Load conversation history from Redis ──────────────────────
+            history = await memory.get_history(session_id=session_id)
+            log.info("history_loaded", turns=len(history))
 
-        # ── 4. Persist to Redis (hot memory for next turn) ───────────────────
-        await memory.append_turn(session_id, "user", user_text)
-        await memory.append_turn(session_id, "assistant", response_text)
+            # ── 3. Call LLM (may invoke tool calls internally) ───────────────
+            response_text, tool_calls = await llm_client.chat(
+                history=history,
+                user_text=user_text,
+            )
+            log.info(
+                "llm_replied",
+                preview=response_text[:80],
+                tool_calls=len(tool_calls),
+            )
 
-        # ── 5. Persist to MongoDB (cold storage / audit trail) ───────────────
-        await db.append_turn(
-            session_id=session_id,
-            user_text=user_text,
-            assistant_text=response_text,
-            tool_calls=tool_calls,
-        )
+            # ── 4. Persist to Redis (hot memory for next turn) ───────────────
+            await memory.append_turn(session_id, "user", user_text)
+            await memory.append_turn(session_id, "assistant", response_text)
 
-        # ── 6. Publish reply to the gateway's exclusive reply queue ──────────
+            # ── 5. Persist to MongoDB (cold storage / audit trail) ───────────
+            await db.append_turn(
+                session_id=session_id,
+                user_text=user_text,
+                assistant_text=response_text,
+                tool_calls=tool_calls,
+            )
+
+        except RateLimitError:
+            log.error("agent_rate_limited")
+            response_text = (
+                "I am currently rate limited by the AI service. "
+                "Please wait a moment and try again."
+            )
+        except Exception as exc:
+            log.error("agent_processing_failed", error=str(exc))
+            response_text = (
+                "I encountered an error processing your request. Please try again."
+            )
+
+        # ── 6. Always publish reply — even on errors, so the gateway never
+        #       times out waiting for a response that will never arrive. ───────
         if message.reply_to and message.correlation_id:
             await channel.default_exchange.publish(
                 aio_pika.Message(
