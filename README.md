@@ -120,8 +120,8 @@ session's conversation history from Redis, calls Llama 3.3 70B on Groq (with the
 history for multi-turn memory), handles any `tool_calls` by hitting the PubMed
 E-utilities API, then appends turns to both Redis (hot memory) and MongoDB (cold audit
 trail). The reply is published back to the gateway's temporary reply queue. Any
-unhandled exception nacks the message → routed to the dead-letter queue
-`agent.dead_letters`. A regex filter strips function-call markup that Llama occasionally
+unhandled exception nacks the message → routed via dead-letter exchange `agent.dlx`
+to the dead-letter queue `agent.dead_letters`. A regex filter strips function-call markup that Llama occasionally
 leaks into response text before the reply is sent.
 
 ### Redis Memory (`agent/memory.py`)
