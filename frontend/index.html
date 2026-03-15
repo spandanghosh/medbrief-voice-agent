@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MedBrief — Voice Clinical Assistant</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #0d1117;
+      --surface:     #161b22;
+      --border:      #30363d;
+      --text:        #e6edf3;
+      --muted:       #8b949e;
+      --accent:      #58a6ff;
+      --red:         #f85149;
+      --yellow:      #d29922;
+      --green:       #3fb950;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2.5rem 1rem 4rem;
+    }
+
+    /* ── Header ────────────────────────────────────────────────── */
+    header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    header h1 {
+      font-size: 1.8rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+    header p {
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-top: 0.35rem;
+    }
+
+    /* ── Status badge ──────────────────────────────────────────── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.3rem 0.8rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      margin-bottom: 2rem;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .badge .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      flex-shrink: 0;
+    }
+    .badge[data-state="recording"] { color: var(--red);    border-color: var(--red); }
+    .badge[data-state="processing"]{ color: var(--yellow); border-color: var(--yellow); }
+    .badge[data-state="speaking"]  { color: var(--green);  border-color: var(--green); }
+
+    .badge[data-state="recording"]  .dot { animation: blink 0.9s infinite; }
+    .badge[data-state="processing"] .dot { animation: blink 1.4s infinite; }
+    .badge[data-state="speaking"]   .dot { animation: blink 0.7s infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.2} }
+
+    /* ── Mic button ────────────────────────────────────────────── */
+    .mic-btn {
+      width: 76px; height: 76px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 1.9rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+      outline: none;
+      margin-bottom: 2.5rem;
+      user-select: none;
+    }
+    .mic-btn:hover:not(:disabled) {
+      border-color: var(--accent);
+      background: rgba(88,166,255,.08);
+    }
+    .mic-btn:focus-visible {
+      box-shadow: 0 0 0 3px rgba(88,166,255,.4);
+    }
+    .mic-btn[data-state="recording"] {
+      border-color: var(--red);
+      background: rgba(248,81,73,.1);
+      animation: ripple 1.4s ease-out infinite;
+    }
+    .mic-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    @keyframes ripple {
+      0%   { box-shadow: 0 0 0 0 rgba(248,81,73,.5); }
+      70%  { box-shadow: 0 0 0 18px rgba(248,81,73,0); }
+      100% { box-shadow: 0 0 0 0 rgba(248,81,73,0); }
+    }
+
+    /* ── Hint / error ──────────────────────────────────────────── */
+    .hint  { color: var(--muted); font-size: 0.78rem; text-align: center; margin-bottom: 0.4rem; }
+    .error { color: var(--red);   font-size: 0.8rem;  text-align: center; min-height: 1.2em; margin-bottom: 1rem; }
+
+    /* ── Conversation transcript ────────────────────────────────── */
+    .transcript {
+      width: 100%;
+      max-width: 620px;
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+    .turn {
+      padding: 0.7rem 1rem;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      line-height: 1.6;
+      border: 1px solid var(--border);
+      max-width: 88%;
+      word-break: break-word;
+    }
+    .turn-label {
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      display: block;
+      margin-bottom: 0.3rem;
+    }
+    .turn.user {
+      background: rgba(88,166,255,.06);
+      border-color: rgba(88,166,255,.2);
+      align-self: flex-end;
+    }
+    .turn.user .turn-label { color: var(--accent); }
+    .turn.assistant {
+      background: var(--surface);
+      align-self: flex-start;
+    }
+    .turn.assistant .turn-label { color: var(--green); }
+
+    /* ── Keyboard hint ─────────────────────────────────────────── */
+    .kb-hint {
+      color: var(--muted);
+      font-size: 0.72rem;
+      margin-top: 2rem;
+    }
+    kbd {
+      display: inline-block;
+      padding: 0.1em 0.4em;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.75em;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>MedBrief</h1>
+    <p>Voice-powered clinical protocol assistant</p>
+  </header>
+
+  <div class="badge" id="badge" data-state="idle">
+    <span class="dot"></span>
+    <span id="badgeText">Idle</span>
+  </div>
+
+  <button class="mic-btn" id="micBtn" data-state="idle" aria-label="Start recording">
+    🎙️
+  </button>
+
+  <p class="hint">Click the mic to ask about clinical protocols, drug guidelines, or treatment procedures.</p>
+  <p class="error" id="errorMsg" aria-live="assertive"></p>
+
+  <div class="transcript" id="transcript" aria-live="polite"></div>
+
+  <p class="kb-hint">Press <kbd>Space</kbd> to toggle recording</p>
+
+  <script src="app.js"></script>
+</body>
+</html>
