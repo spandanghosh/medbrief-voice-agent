@@ -12,6 +12,40 @@ Fully Dockerised, runs from a single command, and uses the **Groq free tier** th
 
 ---
 
+## Flow
+
+```
+ User speaks
+     │
+     ▼
+ Browser (JS)
+ MediaRecorder captures audio blob
+     │  POST /voice (audio)
+     ▼
+ Gateway (FastAPI)
+ ├── STT: Groq Whisper → transcript text
+ └── Publishes to RabbitMQ ──────────────────┐
+                                             │ AMQP message
+                                             ▼
+                                     Agent Worker
+                                     ├── Load history ← Redis
+                                     ├── Call Llama 3.3 70B (Groq)
+                                     ├── Tool call? → PubMed search
+                                     ├── Save history → Redis
+                                     ├── Save session → MongoDB
+                                     └── Reply to RabbitMQ ──────┐
+                                                                  │
+ Gateway receives reply ◄─────────────────────────────────────────┘
+     │
+     ▼
+ TTS: edge-tts → MP3 audio stream
+     │
+     ▼
+ Browser plays response
+```
+
+---
+
 ## Architecture
 
 ```
