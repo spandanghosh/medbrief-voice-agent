@@ -19,6 +19,7 @@
 
 // Set to your Render gateway URL after deploying. Empty string = same-origin (local dev).
 const API_BASE = 'https://medbrief-gateway.onrender.com';
+const API_KEY  = '4TNqTjBhCcCpmGlKsLgAXT3orUVXreZw4c1yfQ0Gvb0';
 
 // ── AudioWorklet processor source (inlined as a Blob URL) ────────────────────
 // This runs in the audio rendering thread — no DOM, no fetch, no closures.
@@ -221,7 +222,7 @@ async function handleRecordingStop() {
     response = await fetch(`${API_BASE}/voice`, {
       method: 'POST',
       body:   formData,
-      headers: { 'X-Session-Id': sessionId },
+      headers: { 'X-Session-Id': sessionId, 'X-API-Key': API_KEY },
     });
   } catch (err) {
     showError(`Network error: ${err.message}`);
