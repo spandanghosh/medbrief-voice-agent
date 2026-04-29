@@ -18,7 +18,7 @@
 'use strict';
 
 // Set to your Render gateway URL after deploying. Empty string = same-origin (local dev).
-const API_BASE = '';
+const API_BASE = 'https://medbrief-gateway.onrender.com';
 
 // ── AudioWorklet processor source (inlined as a Blob URL) ────────────────────
 // This runs in the audio rendering thread — no DOM, no fetch, no closures.
