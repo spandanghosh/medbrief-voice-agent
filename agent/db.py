@@ -26,8 +26,12 @@ class SessionDB:
         self._settings = settings
         self._client: Optional[AsyncIOMotorClient] = None
         self._db: Optional[AsyncIOMotorDatabase] = None
+        self._enabled = bool(settings.mongodb_url)
 
     async def connect(self) -> None:
+        if not self._enabled:
+            logger.info("mongodb_disabled", reason="MONGODB_URL not set — audit logging skipped")
+            return
         self._client = AsyncIOMotorClient(self._settings.mongodb_url)
         self._db = self._client[self._settings.mongodb_db]
         # Verify connectivity
@@ -46,6 +50,8 @@ class SessionDB:
     async def ensure_session(
         self, session_id: str, user_agent: str = ""
     ) -> None:
+        if not self._enabled:
+            return
         """
         Create a session document the first time this session_id is seen.
         $setOnInsert is a no-op if the document already exists, making this
@@ -83,6 +89,8 @@ class SessionDB:
         assistant_text: str,
         tool_calls: Optional[list[dict]] = None,
     ) -> None:
+        if not self._enabled:
+            return
         """
         Atomically append user + assistant turns and update ended_at.
         tool_calls is logged on the assistant turn for auditability.

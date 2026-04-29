@@ -8,11 +8,15 @@ from contextlib import asynccontextmanager
 from urllib.parse import quote
 
 import structlog
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────
@@ -39,6 +43,7 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     gateway_port: int = 8000
+    api_key: str = ""
 
     class Config:
         env_file = ".env"
@@ -46,6 +51,18 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+limiter = Limiter(key_func=get_remote_address)
+
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def verify_api_key(key: str | None = Security(_api_key_header)):
+    if not settings.api_key:
+        return
+    if key != settings.api_key:
+        raise HTTPException(status_code=401, detail={"error": "Invalid API key"})
+
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -85,9 +102,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="MedBrief Gateway", version="1.0.0", lifespan=lifespan)
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # tighten to your Vercel URL after deploy
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["X-Session-Id", "X-Response-Text"],
@@ -122,7 +142,8 @@ async def health():
     return HealthResponse(status="ok", service="gateway")
 
 
-@app.post("/voice")
+@app.post("/voice", dependencies=[Depends(verify_api_key)])
+@limiter.limit("3/minute")
 async def voice_endpoint(request: Request, audio: UploadFile = File(...)):
     """
     Full voice pipeline:
@@ -179,8 +200,9 @@ async def voice_endpoint(request: Request, audio: UploadFile = File(...)):
     )
 
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(body: ChatRequest, request: Request):
+@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
+@limiter.limit("20/minute")
+async def chat_endpoint(request: Request, body: ChatRequest):
     """Text-only endpoint for testing without audio hardware."""
     req_id = str(uuid.uuid4())
     log = logger.bind(request_id=req_id, endpoint="/chat", session_id=body.session_id)
@@ -193,8 +215,9 @@ async def chat_endpoint(body: ChatRequest, request: Request):
     return ChatResponse(session_id=body.session_id, text=response_text)
 
 
-@app.post("/tts")
-async def tts_endpoint(body: TTSRequest):
+@app.post("/tts", dependencies=[Depends(verify_api_key)])
+@limiter.limit("20/minute")
+async def tts_endpoint(request: Request, body: TTSRequest):
     """Standalone TTS endpoint — converts text to streaming MP3."""
     log = logger.bind(endpoint="/tts")
     log.info("tts_request", chars=len(body.text))

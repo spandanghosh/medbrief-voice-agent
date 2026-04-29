@@ -17,6 +17,9 @@
 
 'use strict';
 
+// Set to your Render gateway URL after deploying. Empty string = same-origin (local dev).
+const API_BASE = '';
+
 // ── AudioWorklet processor source (inlined as a Blob URL) ────────────────────
 // This runs in the audio rendering thread — no DOM, no fetch, no closures.
 const SILENCE_PROCESSOR_SRC = `
@@ -215,7 +218,7 @@ async function handleRecordingStop() {
 
   let response;
   try {
-    response = await fetch('/voice', {
+    response = await fetch(`${API_BASE}/voice`, {
       method: 'POST',
       body:   formData,
       headers: { 'X-Session-Id': sessionId },

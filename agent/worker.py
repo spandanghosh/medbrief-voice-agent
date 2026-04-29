@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     session_ttl: int = 1800
     max_history_turns: int = 20
 
-    mongodb_url: str = "mongodb://mongodb:27017"
+    mongodb_url: str = ""
     mongodb_db: str = "medbrief"
 
     log_level: str = "INFO"

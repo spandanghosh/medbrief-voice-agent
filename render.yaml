@@ -1,0 +1,55 @@
+services:
+  - type: web
+    name: medbrief-gateway
+    runtime: docker
+    dockerfilePath: ./gateway/Dockerfile
+    dockerContext: ./gateway
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: RABBITMQ_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: LLM_MODEL
+        value: llama-3.3-70b-versatile
+      - key: STT_MODEL
+        value: whisper-large-v3
+      - key: TTS_VOICE
+        value: en-US-AriaNeural
+      - key: RPC_TIMEOUT_SECONDS
+        value: "30"
+      - key: SESSION_TTL
+        value: "1800"
+      - key: MAX_HISTORY_TURNS
+        value: "20"
+      - key: LOG_LEVEL
+        value: INFO
+
+  - type: worker
+    name: medbrief-agent
+    runtime: docker
+    dockerfilePath: ./agent/Dockerfile
+    dockerContext: ./agent
+    plan: free
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: RABBITMQ_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: LLM_MODEL
+        value: llama-3.3-70b-versatile
+      - key: RPC_TIMEOUT_SECONDS
+        value: "30"
+      - key: SESSION_TTL
+        value: "1800"
+      - key: MAX_HISTORY_TURNS
+        value: "20"
+      - key: LOG_LEVEL
+        value: INFO
