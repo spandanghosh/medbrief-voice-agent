@@ -10,6 +10,8 @@ of the conversation so follow-up questions work naturally.
 Fully Dockerised, runs from a single command, and uses the **Groq free tier** throughout
 — no credit card required.
 
+**Live demo:** https://medbrief-voice-agent.vercel.app
+
 ---
 
 ## Flow
@@ -81,6 +83,26 @@ Fully Dockerised, runs from a single command, and uses the **Groq free tier** th
 │   history)   │   │  tool call logs for post-analysis            │
 └──────────────┘   └──────────────────────────────────────────────┘
 ```
+
+---
+
+## Cloud Deployment (Free Tier)
+
+The app is deployed on fully free tiers with no credit card required:
+
+| Component | Host |
+|-----------|------|
+| Frontend | Vercel |
+| Gateway (FastAPI) | Render Web Service |
+| Agent Worker | Render Web Service |
+| RabbitMQ | CloudAMQP "Little Lemur" |
+| Redis | Upstash |
+| MongoDB | Disabled (audit logging skipped) |
+
+Security: `X-API-Key` header required on all endpoints, IP rate limiting via `slowapi`
+(3 req/min on `/voice`, 20 req/min on `/chat` and `/tts`).
+
+See [`render.yaml`](render.yaml) for the Render Blueprint configuration.
 
 ---
 
@@ -172,6 +194,9 @@ document holds `started_at`, `ended_at`, the full `turns` array with `tool_calls
 assistant turns for auditability, and metadata. `ensure_session` uses `$setOnInsert`
 with `upsert=True` so concurrent first-turn calls are safe.
 
+MongoDB is **optional** — if `MONGODB_URL` is not set, all persistence operations are
+silently skipped. The core voice chat flow relies only on Redis for session memory.
+
 ---
 
 ## Design Decisions
@@ -208,7 +233,7 @@ producing quality comparable to paid TTS APIs.
 - Safari does not support `MediaSource` with `audio/mpeg`; playback falls back to
   collect-then-play via a Blob URL.
 - End-to-end latency is roughly 3–8 s (STT → AMQP RPC → LLM → TTS chained sequentially).
-- No authentication layer — for local / demo use only.
+- API key auth (`X-API-Key` header) and IP rate limiting are applied in the cloud deployment. Local Docker Compose runs without auth by default (`API_KEY` env var empty = disabled).
 - PubMed E-utilities returns at most 3 abstracts and is rate-limited to 3 req/s
   without a `PUBMED_API_KEY`.
 - Llama 3.x occasionally leaks function-call markup into response text; a regex
