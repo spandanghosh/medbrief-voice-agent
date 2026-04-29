@@ -107,7 +107,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten to your Vercel URL after deploy
+    allow_origins=["https://medbrief-voice-agent.vercel.app/"],  # tighten to your Vercel URL after deploy
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["X-Session-Id", "X-Response-Text"],
