@@ -30,12 +30,13 @@ services:
       - key: LOG_LEVEL
         value: INFO
 
-  - type: worker
+  - type: web
     name: medbrief-agent
     runtime: docker
     dockerfilePath: ./agent/Dockerfile
     dockerContext: ./agent
     plan: free
+    healthCheckPath: /health
     envVars:
       - key: GROQ_API_KEY
         sync: false

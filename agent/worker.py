@@ -15,6 +15,9 @@ message.process(requeue=False) nacks the message → routed to DLQ.
 import asyncio
 import json
 import logging
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import aio_pika
 import aio_pika.abc
@@ -73,6 +76,23 @@ structlog.configure(
     logger_factory=structlog.PrintLoggerFactory(),
 )
 logger = structlog.get_logger()
+
+
+# ── Health server (required for Render web service free tier) ─────────────────
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'ok')
+
+    def log_message(self, *args):
+        pass  # suppress request logs
+
+
+def _start_health_server():
+    port = int(os.environ.get("PORT", 8001))
+    HTTPServer(("0.0.0.0", port), _HealthHandler).serve_forever()
 
 
 # ── Message processor ─────────────────────────────────────────────────────────
@@ -165,6 +185,7 @@ async def process_message(
 
 async def main() -> None:
     logger.info("agent_worker_starting")
+    threading.Thread(target=_start_health_server, daemon=True).start()
 
     memory = ConversationMemory(settings)
     await memory.connect()
