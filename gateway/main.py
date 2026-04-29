@@ -137,7 +137,7 @@ class HealthResponse(BaseModel):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@app.get("/health", response_model=HealthResponse)
+@app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)
 async def health():
     return HealthResponse(status="ok", service="gateway")
 
